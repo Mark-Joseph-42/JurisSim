@@ -151,16 +151,29 @@ class LegalLLM_API:
         print(f"Using API inference: {api_url} with model {self.model}")
 
     def _generate(self, prompt: str, max_tokens=2048) -> str:
-        resp = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": "You are a legal AI assistant specialized in formal logic and Z3. Output only what is asked."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=max_tokens,
-            temperature=0.1
-        )
-        response = resp.choices[0].message.content
+        import time
+        last_error = None
+        for attempt in range(3):
+            try:
+                resp = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": "You are a legal AI assistant specialized in formal logic and Z3. Output only what is asked."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    max_tokens=max_tokens,
+                    temperature=0.1
+                )
+                response = resp.choices[0].message.content
+                break
+            except Exception as e:
+                last_error = e
+                wait = 2 ** attempt
+                print(f"  [!] API call failed (attempt {attempt+1}/3): {e}. Retrying in {wait}s...")
+                time.sleep(wait)
+        else:
+            print(f"  [!] All 3 API attempts failed: {last_error}")
+            return ""
         # Strip thinking tags if present (DeepSeek-R1)
         if "<think>" in response:
             parts = response.split("</think>")
