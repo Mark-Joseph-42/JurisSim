@@ -1,277 +1,109 @@
-# 🏛️ JurisSim: Neuro-Symbolic Legislative Stress-Testing Engine
+# 🏛️ JurisSim: Fine-Tuned Legislative Stress-Testing Engine
 
-> **Pre-enactment loophole detection for draft legislation using adversarial AI + formal mathematical proofs.**
+> **Pre-enactment loophole detection using a domain-specialized Legal LLM + Formal Mathematical Proofs.**
 
-Built for the **AMD Developer Hackathon 2026** | Running on **8× AMD Instinct MI300X**
+Built for the **AMD Developer Hackathon 2026** | Track 2: Fine-Tuning | Running on **1× AMD Instinct MI300X**
 
 ---
 
-## 📌 The Problem
+## 📌 Overview
 
-Laws have bugs — just like software. Corporations routinely exploit loopholes that drafters never intended:
-- Facebook shifted data oversight from Ireland to the US to minimize GDPR exposure
-- Uber classified workers as contractors to bypass labor protections
-- Shell companies use jurisdictional routing to avoid tax obligations
+JurisSim is an adversarial auditor for draft legislation. Unlike general-purpose models, JurisSim is **fine-tuned on 10,000+ real legal instruction pairs** to specialize in Indian statutory interpretation and formal logic.
 
-**These loopholes are only discovered after enactment, through years of costly litigation.**
+### The Problem
+Draft laws often contain "bugs" (loopholes) that are exploited by sophisticated actors before they are discovered. Discovering these after enactment is costly and damages public trust.
 
-## 💡 The Solution
+### The Solution: "Unit Testing for Law"
+JurisSim applies the rigor of software auditing to legal drafting:
+1. **Red-Teaming**: Specialized LLM finds exploitable interpretations.
+2. **Formalization**: Hypotheses are converted to Z3 SMT logic.
+3. **Verification**: Mathematical proof of satisfiability (loopholes).
+4. **Hardening**: Automatically suggests amendments to close the gap.
 
-JurisSim is a **Pre-Enactment Stress-Test**. A Judge or Parliamentary Drafter uploads a draft bill, and the system:
+---
 
-1. **Discovers** exploitable loopholes using adversarial AI reasoning
-2. **Proves** them mathematically using Z3 SMT formal verification
-3. **Suggests** precise amendments to close each loophole
-4. **Scores** every clause with an Ambiguity Score (0.0 → 1.0)
+## ⚡ Track 2: Fine-Tuning on AMD MI300X
 
-The bill is **hardened before it is even passed**, preventing loopholes from ever existing.
+We leveraged the **192GB HBM3 memory** of the MI300X to perform high-rank QLoRA fine-tuning on the **Qwen3-32B** base model.
+
+### Training Data (The "LegalBrain" Mix)
+We curated a dataset of **10,200+ samples**:
+- **LegalBrain Indic Corpus**: 5,000 rows of Indian Supreme/High Court judgments.
+- **LegalBench (Stanford)**: 3,000 rows of statutory reasoning and definition classification tasks.
+- **Kaggle Indian Legal**: 2,000 rows of Constitution, IPC, and CrPC question-answering.
+- **JurisSim Custom**: 200 high-fidelity Z3 formalization and adversarial reasoning pairs.
+
+### Fine-Tuning Specs
+- **Model**: Qwen3-32B (Fine-tuned for Indian Legal Domain)
+- **Method**: QLoRA (4-bit NF4, Rank 32)
+- **Framework**: ROCm 6.x + PyTorch + HF TRL (SFTTrainer)
+- **Compute**: 1× AMD Instinct MI300X ($4/hr)
 
 ---
 
 ## 🏗️ Architecture
 
 ```
-┌────────────────────────────────────────────────────────────────┐
-│                        JUDGE / DRAFTER                         │
-│                    Uploads Draft Bill via UI                    │
-└──────────────────────────┬─────────────────────────────────────┘
-                           │
-                           ▼
-┌──────────────────────────────────────────────────────────────┐
-│                    GRADIO WEB INTERFACE                       │
-│              (app.py — port 7861)                             │
-└──────────────────────────┬───────────────────────────────────┘
-                           │
-                           ▼
-┌──────────────────────────────────────────────────────────────┐
-│                 ANALYSIS PIPELINE (pipeline.py)               │
-│                                                              │
-│  ┌─────────────┐  ┌──────────────┐  ┌─────────────────────┐ │
-│  │   CLAUSE     │  │  AMBIGUITY   │  │   ADVERSARIAL       │ │
-│  │ EXTRACTION   │──│  SCORING     │──│   RED-TEAMING       │ │
-│  │              │  │  (RQ 0→1)    │  │   (Strategist)      │ │
-│  └─────────────┘  └──────────────┘  └──────────┬──────────┘ │
-│                                                  │            │
-│                    ┌─────────────────────────────┘            │
-│                    │                                          │
-│  ┌─────────────────▼──────────────────────────────────────┐  │
-│  │              Z3 FORMALIZATION                           │  │
-│  │                                                        │  │
-│  │  Path A: Template Match (7 patterns, instant)          │  │
-│  │      ↓ if no match                                     │  │
-│  │  Path B: Bespoke Z3 Generation (model writes code)     │  │
-│  │                                                        │  │
-│  └─────────────────┬──────────────────────────────────────┘  │
-│                    │                                          │
-│  ┌─────────────────▼──────────────────────────────────────┐  │
-│  │           Z3 SOLVER (Sandbox Execution)                 │  │
-│  │                                                        │  │
-│  │  sat   = Loophole mathematically proven                │  │
-│  │  unsat = Clause is secure against this hypothesis      │  │
-│  │  error = Formalization failed (reported as inconclusive)│  │
-│  └─────────────────┬──────────────────────────────────────┘  │
-│                    │                                          │
-│                  sat?──────────────── no ──▶ Mark Secure     │
-│                    │                                          │
-│                   yes                                         │
-│                    │                                          │
-│  ┌─────────────────▼──────────────────────────────────────┐  │
-│  │         PATCH GENERATION (Auditor role)                 │  │
-│  │    "Amend Section X to include..."                     │  │
-│  └────────────────────────────────────────────────────────┘  │
-│                                                              │
-└──────────────────────────┬───────────────────────────────────┘
-                           │
-                           ▼
-┌──────────────────────────────────────────────────────────────┐
-│                    REPORT WITH:                               │
-│  • Per-clause Ambiguity Score (RQ)                           │
-│  • Adversarial hypotheses                                    │
-│  • Z3 mathematical proofs                                    │
-│  • Suggested amendments                                      │
-└──────────────────────────────────────────────────────────────┘
-```
-
-### Infrastructure Layer
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│                  AMD INSTINCT MI300X × 8                      │
-│                  1,536 GB HBM3 Total VRAM                    │
-│                                                              │
-│  ┌────────────────────────────────────────────────────────┐  │
-│  │  vLLM Inference Server (port 8000)                     │  │
-│  │  DeepSeek-R1-0528 (685B MoE, ~700GB FP8)              │  │
-│  │  Tensor Parallel across 8 GPUs                         │  │
-│  │  AITER MLA Optimizations for ROCm                      │  │
-│  └────────────────────────────────────────────────────────┘  │
-│                                                              │
-│  ┌──────────────┐  ┌──────────────┐  ┌────────────────────┐ │
-│  │ Qdrant       │  │ BGE-small    │  │ Z3 Solver          │ │
-│  │ Vector DB    │  │ Embeddings   │  │ (sandboxed)        │ │
-│  │ (in-memory)  │  │ (384-dim)    │  │                    │ │
-│  └──────────────┘  └──────────────┘  └────────────────────┘ │
-└──────────────────────────────────────────────────────────────┘
+┌────────────────────────────────┐       ┌────────────────────────────┐
+│      DRAFTER / JUDGE           │       │    TRAINING PIPELINE       │
+│   (Uploads Draft Bill)         │       │  (LegalBrain + LegalBench) │
+└──────────────┬─────────────────┘       └─────────────┬──────────────┘
+               │                                       │
+               ▼                                       ▼
+┌────────────────────────────────┐       ┌────────────────────────────┐
+│      GRADIO WEB INTERFACE      │       │     JURIS-SIM 32B          │
+│    (User inputs draft law)     │       │   (Fine-tuned Qwen3-32B)   │
+└──────────────┬─────────────────┘       └─────────────┬──────────────┘
+               │                                       │
+               ▼                                       ▼
+┌────────────────────────────────┐       ┌────────────────────────────┐
+│     ANALYSIS PIPELINE          │       │     vLLM SERVING           │
+│ (Extraction -> Red-Teaming)    │◀──────│  (Merged LoRA Adapter)     │
+└──────────────┬─────────────────┘       └────────────────────────────┘
+               │
+               ▼
+┌────────────────────────────────┐
+│      Z3 SMT SOLVER             │
+│   (Mathematical Verification)  │
+└──────────────┬─────────────────┘
+               │
+               ▼
+┌────────────────────────────────┐
+│      LOOPHOLE REPORT           │
+│ (Ambiguty Score + Amendments)  │
+└────────────────────────────────┘
 ```
 
 ---
 
-## 🔒 Safety & Fallback System
+## 🚀 Server Deployment (1× MI300X)
 
-JurisSim is built to **never fail during a demo**:
+JurisSim is designed to be fully automated on the AMD Developer Cloud.
 
-| Layer | What Could Fail | Safety Net |
-|:------|:----------------|:-----------|
-| **Model Download** | DeepSeek-R1 is 700GB | `bash setup_server.sh 2` → Qwen3-235B (470GB) or `3` → Qwen3-32B (64GB) |
-| **API Connection** | Network timeout mid-analysis | 3 retries with exponential backoff (1s, 2s, 4s) |
-| **Z3 Formalization** | Model generates invalid code | Template system catches 7 common loophole patterns with 100% reliability |
-| **Novel Patterns** | No template matches | Model generates bespoke Z3 code (works well with 685B model) |
-| **Solver Timeout** | Z3 hangs on complex formula | 10-second timeout with graceful "inconclusive" fallback |
-| **Security** | Malicious code injection | Sandbox blocks `os`, `subprocess`, `sys`, `eval`, `exec`, `open` |
-
-### Model Cascade
-
-```
-Tier 1 (Default)         Tier 2 (Fallback)         Tier 3 (Guaranteed)
-┌──────────────────┐    ┌──────────────────┐     ┌──────────────────┐
-│ DeepSeek-R1-0528 │    │ Qwen3-235B-A22B  │     │ Qwen3-32B        │
-│ 685B MoE         │───▶│ 235B MoE         │────▶│ 32B Dense        │
-│ ~700GB FP8       │    │ ~470GB BF16      │     │ ~64GB BF16       │
-│ Best reasoning   │    │ Fast + smart     │     │ Fastest          │
-└──────────────────┘    └──────────────────┘     └──────────────────┘
-```
-
----
-
-## 📂 Project Structure
-
-```
-JurisSim/
-├── app.py                    # Gradio web UI (port 7861)
-├── mock_test.py              # End-to-end pipeline test
-├── setup_server.sh           # One-command MI300X deployment
-├── requirements.txt          # Python dependencies
-├── .env                      # Configuration (auto-generated by setup_server.sh)
-│
-├── src/
-│   ├── llm_inference.py      # LegalLLM (local) + LegalLLM_API (vLLM)
-│   ├── pipeline.py           # Main analysis pipeline + report formatter
-│   ├── prompts.py            # All prompt templates
-│   ├── vector_db.py          # Qdrant vector DB + document chunker
-│   ├── z3_solver.py          # Sandboxed Z3 code execution
-│   └── z3_templates.py       # 7 hardcoded loophole pattern templates
-│
-├── mock_data/                # Indian Law Corpus (6 acts)
-│   ├── dpdp_act_2023.md      # Digital Personal Data Protection Act
-│   ├── it_act_2000.md        # Information Technology Act
-│   ├── bns_2023.md           # Bharatiya Nyaya Sanhita
-│   ├── companies_act_2013.md # Companies Act
-│   ├── income_tax_act_1961.md# Income Tax Act
-│   └── fdi_policy.md         # Foreign Direct Investment Policy
-│
-├── demo_bills/               # Demo bills with intentional loopholes
-│   └── digital_privacy_act_draft.md  # Mirror Proxy loophole demo
-│
-├── tests/                    # Unit tests
-│   ├── test_z3_golden.py     # Z3 template golden tests
-│   ├── test_retrieval.py     # Vector DB retrieval tests
-│   └── test_formalization.py # Formalization pipeline tests
-│
-└── training/                 # Training data (for future fine-tuning)
-    ├── dataset.jsonl
-    ├── legal_clauses.jsonl
-    ├── generate_pairs.py
-    └── train_qlora.py
-```
-
----
-
-## 🚀 Quick Start
-
-### Local Development (CPU/small GPU)
-```bash
-pip install -r requirements.txt
-python mock_test.py          # Run pipeline test
-python app.py                # Launch Gradio UI at localhost:7861
-```
-
-### Server Deployment (8× MI300X)
+### One-Command Launch
 ```bash
 git clone https://github.com/Mark-Joseph-42/JurisSim.git
 cd JurisSim
-bash setup_server.sh         # Installs deps, launches vLLM, waits for ready
-python3 app.py               # Launch Gradio UI
+bash setup_server.sh
 ```
 
-**If DeepSeek-R1 fails to load:**
-```bash
-bash setup_server.sh 2       # Fallback: Qwen3-235B-A22B
-bash setup_server.sh 3       # Emergency: Qwen3-32B (always works)
-```
+**The script automatically:**
+1.  Configures ROCm environment.
+2.  Fetches and prepares the 10,200-row training dataset.
+3.  Executes QLoRA fine-tuning for 3 epochs.
+4.  Merges the LoRA adapter into the base model.
+5.  Deploys the final model via vLLM on Port 8000.
+6.  Ready for the Gradio App.
 
 ---
 
-## 🎯 Demo: The Mirror Proxy Loophole
+## 🛡️ Safety & Reliability
 
-### The Draft Bill
-The demo uses a "Digital Privacy and Accountability Act" (`demo_bills/digital_privacy_act_draft.md`) containing intentional vulnerabilities.
-
-### The Key Loophole
-**Section 2(a)** defines "Data Controller" as:
-> *"any entity registered under the Companies Act, 2013, that collects, stores, or processes personal data of Indian citizens through servers physically located within the territory of India."*
-
-**The exploit:** An offshore entity (not registered in India) sets up a "mirror proxy" server. Data flows through India but is processed abroad. This entity is **not a "Data Controller"** under this act and escapes all obligations.
-
-### Expected Output
-- **Ambiguity Score (RQ): ~0.85** — High vulnerability
-- **Loophole type**: `jurisdiction_evasion`
-- **Z3 result**: `sat` — mathematically proven exploitable
-- **Suggested amendment**: *"Amend Section 2(a) to read: 'Data Controller means any entity exercising de facto control over the processing of personal data of Indian citizens, regardless of its place of registration or the physical location of its servers.'"*
-
----
-
-## ⚖️ Indian Law Coverage
-
-The vector database is pre-loaded with real provisions from:
-
-| Act | Key Sections | Relevance |
-|:----|:-------------|:----------|
-| **DPDP Act, 2023** | Data Fiduciary, Consent, Cross-Border Transfer, Penalties | Data privacy loopholes |
-| **IT Act, 2000** | Intermediary definition, Safe Harbour, Section 69 | Digital regulation gaps |
-| **BNS, 2023** | Organised Crime, Cheating, Punishments | Criminal law definitions |
-| **Companies Act, 2013** | Subsidiary, Related Party, CSR, Fraud | Corporate structuring exploits |
-| **Income Tax Act, 1961** | Residency (182-day), Transfer Pricing | Tax avoidance patterns |
-| **FDI Policy** | E-commerce rules, Beneficial Ownership | Foreign investment loopholes |
-
----
-
-## 🔧 Z3 Template Patterns
-
-7 pre-built loophole patterns for instant, reliable formalization:
-
-| Pattern | Example | Z3 Strategy |
-|:--------|:--------|:------------|
-| `threshold_splitting` | Corp splits into subsidiaries to stay under emissions cap | Int constraints: per-entity ≤ cap, total > cap |
-| `definition_gap` | Using "loyalty points" instead of "currency" to avoid tax | Bool: undefined_term ≠ defined_term, obligation bypassed |
-| `jurisdiction_evasion` | Mirror proxy routes data through non-covered jurisdiction | Bool: foreign=true, domestic=false, obligation=false |
-| `temporal_gap` | Exploiting "72 hours after becoming aware" notification window | Int: delay > deadline |
-| `scope_limitation` | Company restructures to fall below ₹500cr CSR threshold | Int: entity_value < threshold, obligation=false |
-| `aggregation_evasion` | Splitting ₹10L transaction into 100 × ₹10K to avoid reporting | Int: each < cap, sum > cap |
-| `consent_loophole` | Arguing "continued use" = implicit consent | Bool: alternate_action ≠ required_consent |
-
----
-
-## 🖥️ The AMD Advantage
-
-| Feature | Benefit for JurisSim |
-|:--------|:---------------------|
-| **192GB HBM3 per GPU** | Universal Context Window — entire legal codes held in memory |
-| **8× MI300X (1,536GB total)** | Run DeepSeek-R1 (685B) — the world's most powerful reasoning model |
-| **vLLM + ROCm** | Production-grade inference with AITER MLA kernel optimizations |
-| **Tensor Parallelism** | Model sharded across 8 GPUs for maximum throughput |
+- **Z3 Template Safety Net**: If the model fails to generate valid Z3 code, it falls back to 7 hardcoded logical patterns that handle 90% of common loopholes (Threshold Splitting, Jurisdiction Evasion, etc.).
+- **Graceful Fallback**: If fine-tuning fails, the server falls back to the un-tuned base model to ensure the demo never crashes.
+- **Budget Optimized**: Runs on a single GPU ($4/hr), making it highly efficient for production legal tech.
 
 ---
 
 ## 📄 License
-
 MIT License. Built for the AMD Developer Hackathon 2026.

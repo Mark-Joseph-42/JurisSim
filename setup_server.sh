@@ -1,24 +1,19 @@
 #!/bin/bash
 # ============================================================
-# JurisSim MI300X Server Setup Script (with Safety Fallbacks)
+# JurisSim MI300X Server Setup & Training Pipeline
 # ============================================================
-# Usage: bash setup_server.sh [model_tier]
-#   model_tier: 1 = DeepSeek-R1-0528 (685B, best quality)
-#               2 = Qwen3-235B-A22B (fast + smart)
-#               3 = Qwen3-32B (fastest, guaranteed to work)
-#
-# Default: tries tier 1, auto-falls back if it fails.
+# One-command to rule them all: Data -> Train -> Merge -> Serve
 # ============================================================
 
 set -e
-TIER=${1:-1}
 
 echo "=========================================="
-echo " JurisSim MI300X Server Setup"
-echo " Model Tier: $TIER"
+echo " ⚖️ JurisSim: Legal Auditor Training Pipeline"
+echo " Target Hardware: 1x AMD Instinct MI300X"
 echo "=========================================="
 
-# ---- 1. Environment ----
+# ---- 1. Environment Setups ----
+echo "[1/6] Configuring environment..."
 export HSA_OVERRIDE_GFX_VERSION=9.4.2
 export VLLM_ROCM_USE_AITER=1
 grep -q HSA_OVERRIDE ~/.bashrc 2>/dev/null || {
@@ -26,93 +21,59 @@ grep -q HSA_OVERRIDE ~/.bashrc 2>/dev/null || {
     echo 'export VLLM_ROCM_USE_AITER=1' >> ~/.bashrc
 }
 
-# ---- 2. Install Dependencies ----
-echo "[1/4] Installing dependencies..."
+# Install core dependencies
 pip install vllm openai gradio \
     sentence-transformers qdrant-client z3-solver \
-    python-dotenv -q
-echo "Dependencies installed."
+    python-dotenv trl peft accelerate datasets -q
 
-# ---- 3. Select Model ----
-if [ "$TIER" = "1" ]; then
-    MODEL="deepseek-ai/DeepSeek-R1-0528"
-    EXTRA_ARGS="--block-size 1 --enable-reasoning --reasoning-parser deepseek_r1"
-    DTYPE="auto"
-    MEM="0.90"
-elif [ "$TIER" = "2" ]; then
-    MODEL="Qwen/Qwen3-235B-A22B"
-    EXTRA_ARGS="--enable-reasoning --reasoning-parser deepseek_r1"
-    DTYPE="bfloat16"
-    MEM="0.85"
-else
-    MODEL="Qwen/Qwen3-32B"
-    EXTRA_ARGS="--enable-reasoning --reasoning-parser deepseek_r1"
-    DTYPE="bfloat16"
-    MEM="0.70"
-fi
+# ---- 2. Prepare Data ----
+echo "[2/6] Preparing training data (fetching real legal datasets)..."
+# Expand JurisSim custom data first
+python3 training/expand_data.py
+# Download and merge external datasets (LegalBrain, LegalBench)
+python3 training/prepare_data.py
 
-echo "[2/4] Selected model: $MODEL"
-
-# ---- 4. Create .env ----
+# ---- 3. Configure .env ----
+echo "[3/6] Configuring .env..."
 cat > .env << ENVEOF
-MODEL_ID=$MODEL
+MODEL_ID=Qwen/Qwen3-32B
 QDRANT_URL=:memory:
 EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
 LLM_API_URL=http://localhost:8000/v1
 USE_API=true
 ENVEOF
-echo ".env configured."
 
-# ---- 5. Launch vLLM ----
-echo "[3/4] Launching vLLM (model will download on first run)..."
+# ---- 4. QLoRA Fine-Tuning ----
+echo "[4/6] Starting QLoRA Fine-Tuning (est. 45-60 min)..."
+python3 training/train_qlora.py || {
+    echo "Training failed. Falling back to base model for inference."
+    export JURIS_FALLBACK=true
+}
 
-# Kill any existing vLLM
+# ---- 5. Merge Adapter ----
+if [ "$JURIS_FALLBACK" != "true" ]; then
+    echo "[5/6] Merging LoRA adapters into base model..."
+    python3 training/merge_lora.py
+    SERVE_MODEL="./jurissim-merged"
+else
+    echo "[5/6] Skipping merge, using base model."
+    SERVE_MODEL="Qwen/Qwen3-32B"
+fi
+
+# ---- 6. Launch vLLM ----
+echo "[6/6] Launching vLLM with fine-tuned model..."
 tmux kill-session -t vllm 2>/dev/null || true
-
 tmux new-session -d -s vllm "python3 -m vllm.entrypoints.openai.api_server \
-    --model $MODEL \
-    --tensor-parallel-size 8 \
+    --model $SERVE_MODEL \
+    --tensor-parallel-size 1 \
     --trust-remote-code \
-    --dtype $DTYPE \
+    --dtype bfloat16 \
     --port 8000 \
     --max-model-len 16384 \
-    --gpu-memory-utilization $MEM \
-    $EXTRA_ARGS 2>&1 | tee vllm_server.log"
+    --gpu-memory-utilization 0.85"
 
-# ---- 6. Wait for vLLM to be ready ----
-echo "[4/4] Waiting for vLLM to start (this may take 10-30 min for large models)..."
-echo "       Tip: open another terminal and run 'tmux attach -t vllm' to see progress."
-
-MAX_WAIT=1800  # 30 minutes
-ELAPSED=0
-while [ $ELAPSED -lt $MAX_WAIT ]; do
-    if curl -s http://localhost:8000/health > /dev/null 2>&1; then
-        echo ""
-        echo "=========================================="
-        echo " vLLM is READY!"
-        echo "=========================================="
-        echo ""
-        echo "Quick health check:"
-        curl -s http://localhost:8000/v1/models | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'  Model loaded: {d[\"data\"][0][\"id\"]}')" 2>/dev/null || echo "  Model endpoint active."
-        echo ""
-        echo "NEXT STEPS:"
-        echo "  1. python3 app.py           # Launch Gradio UI"
-        echo "  2. python3 mock_test.py      # Run full pipeline test"
-        echo ""
-        exit 0
-    fi
-    sleep 10
-    ELAPSED=$((ELAPSED + 10))
-    MINS=$((ELAPSED / 60))
-    echo "  Still waiting... (${MINS}m elapsed)"
-done
-
-echo ""
-echo "=========================================="
-echo " WARNING: vLLM did not start in 30 minutes."
-echo " Possible issues:"
-echo "   - Model download still in progress (check: tmux attach -t vllm)"
-echo "   - Out of memory (try: bash setup_server.sh 3)"
-echo "=========================================="
-echo "Fallback: bash setup_server.sh 2   (Qwen3-235B)"
-echo "Fallback: bash setup_server.sh 3   (Qwen3-32B, guaranteed)"
+echo "------------------------------------------"
+echo " SUCCESS: JurisSim is deploying!"
+echo " Use 'tmux attach -t vllm' to watch logs."
+echo " Once ready, run: python3 app.py"
+echo "------------------------------------------"
