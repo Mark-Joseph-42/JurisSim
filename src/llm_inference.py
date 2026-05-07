@@ -142,12 +142,18 @@ class LegalLLM:
         return 0.5
 
 class LegalLLM_API:
-    """API-based inference for vLLM/DeepSeek-R1 on MI300X."""
+    """API-based inference for vLLM-served model on MI300X."""
     def __init__(self):
         from openai import OpenAI
         api_url = os.environ.get("LLM_API_URL", "http://localhost:8000/v1")
         self.client = OpenAI(base_url=api_url, api_key="none")
-        self.model = os.environ.get("MODEL_ID", "deepseek-ai/DeepSeek-R1-0528")
+        # Auto-detect served model from vLLM /v1/models endpoint
+        try:
+            models = self.client.models.list()
+            self.model = models.data[0].id
+            print(f"Auto-detected served model: {self.model}")
+        except Exception:
+            self.model = os.environ.get("MODEL_ID", "Qwen/Qwen3-32B")
         print(f"Using API inference: {api_url} with model {self.model}")
 
     def _generate(self, prompt: str, max_tokens=2048) -> str:
@@ -233,7 +239,7 @@ class LegalLLM_API:
                 print(f"  [~] Template render failed ({e}), falling back...")
         
         # Path 2: Raw generation
-        print("  [~] Generating bespoke Z3 via DeepSeek-R1...")
+        print("  [~] Generating bespoke Z3 via LLM API...")
         prompt = FORMALIZATION_PROMPT.format(clause=clause, hypothesis=hypothesis, context=context)
         return self._generate(prompt, max_tokens=2048)
 

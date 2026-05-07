@@ -2,17 +2,18 @@
 # ============================================================
 # JurisSim MI300X Server Setup & Training Pipeline
 # ============================================================
-# One-command to rule them all: Data -> Train -> Merge -> Serve
+# One-command: Data -> Train -> Merge -> Serve
+# Usage: bash setup_server.sh
 # ============================================================
-
-set -e
 
 echo "=========================================="
 echo " ⚖️ JurisSim: Legal Auditor Training Pipeline"
 echo " Target Hardware: 1x AMD Instinct MI300X"
 echo "=========================================="
 
-# ---- 1. Environment Setups ----
+JURIS_FALLBACK=false
+
+# ---- 1. Environment ----
 echo "[1/6] Configuring environment..."
 export HSA_OVERRIDE_GFX_VERSION=9.4.2
 export VLLM_ROCM_USE_AITER=1
@@ -21,21 +22,20 @@ grep -q HSA_OVERRIDE ~/.bashrc 2>/dev/null || {
     echo 'export VLLM_ROCM_USE_AITER=1' >> ~/.bashrc
 }
 
-# Install core dependencies
 pip install vllm openai gradio \
     sentence-transformers qdrant-client z3-solver \
-    python-dotenv trl peft accelerate datasets -q
+    python-dotenv trl peft accelerate datasets bitsandbytes -q
+echo "  ✓ Dependencies installed."
 
 # ---- 2. Prepare Data ----
-echo "[2/6] Preparing training data (fetching real legal datasets)..."
-# Expand JurisSim custom data first
+echo "[2/6] Preparing training data..."
 python3 training/expand_data.py
-# Download and merge external datasets (LegalBrain, LegalBench)
 python3 training/prepare_data.py
+echo "  ✓ Training data ready."
 
 # ---- 3. Configure .env ----
 echo "[3/6] Configuring .env..."
-cat > .env << ENVEOF
+cat > .env << 'ENVEOF'
 MODEL_ID=Qwen/Qwen3-32B
 QDRANT_URL=:memory:
 EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
@@ -45,23 +45,34 @@ ENVEOF
 
 # ---- 4. QLoRA Fine-Tuning ----
 echo "[4/6] Starting QLoRA Fine-Tuning (est. 45-60 min)..."
-python3 training/train_qlora.py || {
-    echo "Training failed. Falling back to base model for inference."
-    export JURIS_FALLBACK=true
-}
+echo "       Monitor GPU usage: watch rocm-smi"
+if python3 training/train_qlora.py; then
+    echo "  ✓ Training succeeded."
+else
+    echo "  ✗ Training failed! Falling back to base model."
+    JURIS_FALLBACK=true
+fi
 
 # ---- 5. Merge Adapter ----
-if [ "$JURIS_FALLBACK" != "true" ]; then
+if [ "$JURIS_FALLBACK" = "false" ]; then
     echo "[5/6] Merging LoRA adapters into base model..."
-    python3 training/merge_lora.py
-    SERVE_MODEL="./jurissim-merged"
+    if python3 training/merge_lora.py; then
+        SERVE_MODEL="./jurissim-merged"
+        echo "  ✓ Merged model saved."
+    else
+        echo "  ✗ Merge failed! Falling back to base model."
+        SERVE_MODEL="Qwen/Qwen3-32B"
+    fi
 else
-    echo "[5/6] Skipping merge, using base model."
+    echo "[5/6] Skipping merge — using base Qwen3-32B."
     SERVE_MODEL="Qwen/Qwen3-32B"
 fi
 
+# Update .env with the actual served model
+sed -i "s|MODEL_ID=.*|MODEL_ID=$SERVE_MODEL|" .env
+
 # ---- 6. Launch vLLM ----
-echo "[6/6] Launching vLLM with fine-tuned model..."
+echo "[6/6] Launching vLLM inference server..."
 tmux kill-session -t vllm 2>/dev/null || true
 tmux new-session -d -s vllm "python3 -m vllm.entrypoints.openai.api_server \
     --model $SERVE_MODEL \
@@ -69,11 +80,19 @@ tmux new-session -d -s vllm "python3 -m vllm.entrypoints.openai.api_server \
     --trust-remote-code \
     --dtype bfloat16 \
     --port 8000 \
-    --max-model-len 16384 \
-    --gpu-memory-utilization 0.85"
+    --max-model-len 8192 \
+    --gpu-memory-utilization 0.85 2>&1 | tee vllm_server.log"
 
-echo "------------------------------------------"
-echo " SUCCESS: JurisSim is deploying!"
-echo " Use 'tmux attach -t vllm' to watch logs."
-echo " Once ready, run: python3 app.py"
-echo "------------------------------------------"
+echo ""
+echo "=========================================="
+echo " ✓ JurisSim setup complete!"
+echo "=========================================="
+echo ""
+echo " Model: $SERVE_MODEL"
+echo " vLLM:  tmux attach -t vllm  (wait for 'Uvicorn running')"
+echo ""
+echo " Once vLLM is ready, start the demo:"
+echo "   python3 app.py"
+echo ""
+echo " The Gradio app will print a public URL for remote access."
+echo "=========================================="

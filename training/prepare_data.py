@@ -6,21 +6,34 @@ from datasets import load_dataset
 def prepare_legalbrain():
     print("Processing LegalBrain Indic Dataset...")
     try:
-        # Load a subset to avoid memory issues and keep processing fast
         dataset = load_dataset("Prarabdha/indian-legal-supervised-fine-tuning-data", split="train", streaming=True)
         data = []
         count = 0
         for item in dataset:
-            # Simple heuristic for quality: English only, has context and response
-            if item.get('language') == 'en' or any(word in item.get('context', '').lower() for word in ['india', 'court', 'act', 'section']):
+            context = item.get('context', '') or ''
+            response = item.get('response', '') or ''
+            question = item.get('question', '') or ''
+            
+            # Skip empty entries
+            if not context or not response or len(response) < 20:
+                continue
+            
+            # Filter for English and legal relevance
+            lang = item.get('language', '')
+            is_english = lang == 'en' or lang == '' or any(
+                word in context.lower() for word in ['section', 'act', 'court', 'india', 'shall', 'provision']
+            )
+            
+            if is_english:
                 data.append({
-                    "instruction": item.get('question', 'Explain the legal context.'),
-                    "input": item.get('context', ''),
-                    "output": item.get('response', '')
+                    "instruction": question if question else "Analyze the following legal provision.",
+                    "input": context,
+                    "output": response
                 })
                 count += 1
             if count >= 5000:
                 break
+        print(f"  → Loaded {len(data)} LegalBrain samples.")
         return data
     except Exception as e:
         print(f"Error loading LegalBrain: {e}")
@@ -69,16 +82,18 @@ def merge_and_save():
     legalbench = prepare_legalbench()
     kaggle = prepare_kaggle_mock()
     
-    # Load our existing custom data
+    # Load our existing custom data (has 'response' key, not 'output')
     custom_data = []
     if os.path.exists("training/dataset.jsonl"):
         with open("training/dataset.jsonl", 'r') as f:
             for line in f:
+                if not line.strip():
+                    continue
                 d = json.loads(line)
                 custom_data.append({
-                    "instruction": d['instruction'],
+                    "instruction": d.get('instruction', ''),
                     "input": d.get('input', ''),
-                    "output": d['response']
+                    "output": d.get('response', d.get('output', ''))
                 })
 
     final_dataset = legalbrain + legalbench + kaggle + custom_data

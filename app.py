@@ -79,4 +79,4 @@ with gr.Blocks() as demo:
     )
 
 if __name__ == "__main__":
-    demo.launch(theme=gr.themes.Soft(), css=custom_css, server_port=7861)
+    demo.launch(theme=gr.themes.Soft(), css=custom_css, server_port=7861, share=True)
