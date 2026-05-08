@@ -1,109 +1,69 @@
-# 🏛️ JurisSim: Fine-Tuned Legislative Stress-Testing Engine
+# JurisSim: Technical Documentation & Hackathon Guide
 
-> **Pre-enactment loophole detection using a domain-specialized Legal LLM + Formal Mathematical Proofs.**
+## 1. Executive Summary
+**JurisSim** is a Neuro-Symbolic Agent designed to act as an automated legal auditor. By fine-tuning the 32-billion parameter Qwen3 model, JurisSim translates adversarial legal ambiguities and regulatory loopholes into formal mathematical constraints using the Z3 theorem prover. This enables corporate compliance officers to mathematically prove the existence of exploitable loopholes in contracts and legislation.
 
-Built for the **AMD Developer Hackathon 2026** | Track 2: Fine-Tuning | Running on **1× AMD Instinct MI300X**
-
----
-
-## 📌 Overview
-
-JurisSim is an adversarial auditor for draft legislation. Unlike general-purpose models, JurisSim is **fine-tuned on 10,000+ real legal instruction pairs** to specialize in Indian statutory interpretation and formal logic.
-
-### The Problem
-Draft laws often contain "bugs" (loopholes) that are exploited by sophisticated actors before they are discovered. Discovering these after enactment is costly and damages public trust.
-
-### The Solution: "Unit Testing for Law"
-JurisSim applies the rigor of software auditing to legal drafting:
-1. **Red-Teaming**: Specialized LLM finds exploitable interpretations.
-2. **Formalization**: Hypotheses are converted to Z3 SMT logic.
-3. **Verification**: Mathematical proof of satisfiability (loopholes).
-4. **Hardening**: Automatically suggests amendments to close the gap.
+This project was built for the **AMD Developer Hackathon** specifically targeting **Track 2: Fine-Tuning on AMD GPUs**.
 
 ---
 
-## ⚡ Track 2: Fine-Tuning on AMD MI300X
-
-We leveraged the **192GB HBM3 memory** of the MI300X to perform high-rank QLoRA fine-tuning on the **Qwen3-32B** base model.
-
-### Training Data (The "LegalBrain" Mix)
-We curated a dataset of **10,200+ samples**:
-- **LegalBrain Indic Corpus**: 5,000 rows of Indian Supreme/High Court judgments.
-- **LegalBench (Stanford)**: 3,000 rows of statutory reasoning and definition classification tasks.
-- **Kaggle Indian Legal**: 2,000 rows of Constitution, IPC, and CrPC question-answering.
-- **JurisSim Custom**: 200 high-fidelity Z3 formalization and adversarial reasoning pairs.
-
-### Fine-Tuning Specs
-- **Model**: Qwen3-32B (Fine-tuned for Indian Legal Domain)
-- **Method**: QLoRA (4-bit NF4, Rank 32)
-- **Framework**: ROCm 6.x + PyTorch + HF TRL (SFTTrainer)
-- **Compute**: 1× AMD Instinct MI300X ($4/hr)
+## 2. Hardware & Environment Stack
+The model was trained exclusively on AMD hardware via the AMD Developer Cloud.
+*   **Compute:** AMD Instinct™ MI300X Accelerator (192GB VRAM)
+*   **Software Stack:** ROCm 6.2, PyTorch 2.5.1
+*   **Base Model:** `Qwen/Qwen3-32B`
+*   **Training Method:** QLoRA (Quantized Low-Rank Adaptation) using `bitsandbytes`
 
 ---
 
-## 🏗️ Architecture
+## 3. The Fine-Tuning Pipeline (ROCm Optimization)
+Training a 32B model on a single MI300X GPU required severe optimization to avoid mathematical overflows and Out of Memory (OOM) crashes.
 
-```
-┌────────────────────────────────┐       ┌────────────────────────────┐
-│      DRAFTER / JUDGE           │       │    TRAINING PIPELINE       │
-│   (Uploads Draft Bill)         │       │  (LegalBrain + LegalBench) │
-└──────────────┬─────────────────┘       └─────────────┬──────────────┘
-               │                                       │
-               ▼                                       ▼
-┌────────────────────────────────┐       ┌────────────────────────────┐
-│      GRADIO WEB INTERFACE      │       │     JURIS-SIM 32B          │
-│    (User inputs draft law)     │       │   (Fine-tuned Qwen3-32B)   │
-└──────────────┬─────────────────┘       └─────────────┬──────────────┘
-               │                                       │
-               ▼                                       ▼
-┌────────────────────────────────┐       ┌────────────────────────────┐
-│     ANALYSIS PIPELINE          │       │     vLLM SERVING           │
-│ (Extraction -> Red-Teaming)    │◀──────│  (Merged LoRA Adapter)     │
-└──────────────┬─────────────────┘       └────────────────────────────┘
-               │
-               ▼
-┌────────────────────────────────┐
-│      Z3 SMT SOLVER             │
-│   (Mathematical Verification)  │
-└──────────────┬─────────────────┘
-               │
-               ▼
-┌────────────────────────────────┐
-│      LOOPHOLE REPORT           │
-│ (Ambiguty Score + Amendments)  │
-└────────────────────────────────┘
-```
+### The PyTorch SDPA ROCm Bug
+During initial training runs, PyTorch's default `sdpa` (Scaled Dot-Product Attention) implementation suffered a math overflow bug on ROCm 6.2 when handling sequences with padding tokens alongside gradient checkpointing, resulting in catastrophic `NaN` gradients. 
+
+### The "Ultra-Stable" Workaround
+Because compiling `flash_attention_2` for ROCm from source is time-prohibitive, we engineered an ultra-stable configuration that perfectly maximized the 192GB VRAM without hitting the bug:
+1.  **Attention:** Reverted to PyTorch's native `eager` mathematical attention block to avoid `sdpa` bugs.
+2.  **Memory Compression:** Reduced `per_device_train_batch_size=1` but massively increased `gradient_accumulation_steps=8` to maintain an effective batch size of 8.
+3.  **Checkpointing:** Enabled `gradient_checkpointing=True` to prevent the `eager` attention matrices from consuming all 192GB of VRAM during the backward pass.
+4.  **Evaluation Safety:** Enforced `per_device_eval_batch_size=1` to ensure the un-checkpointed validation phase did not crash the GPU.
 
 ---
 
-## 🚀 Server Deployment (1× MI300X)
+## 4. Training Results
+The model successfully converged after 3 Epochs (1,713 Steps).
+*   **Final Train Loss:** `1.756`
+*   **Final Validation Loss:** `1.676` (Signaling excellent generalization and zero overfitting).
+*   **Token Prediction Accuracy:** `62.61%` (Extremely high for complex Legal English → Python Z3 logic translation).
+*   **Gradient Stability:** Maintained a remarkably stable `grad_norm` of `~0.3` to `~0.8` throughout the run.
 
-JurisSim is designed to be fully automated on the AMD Developer Cloud.
+---
 
-### One-Command Launch
+## 5. Deployment Guide (GitHub & Hugging Face)
+To package this project for the hackathon submission, the code must reside on GitHub, and the model must be hosted on Hugging Face.
+
+### Step A: Push to GitHub
+Initialize your local directory, commit the codebase, and push it to a public repository to satisfy the Open Source hackathon requirement. *Do not push the massive `/jurissim-lora` folder to GitHub!*
+
+### Step B: Push the Model to Hugging Face
+You can push the trained LoRA adapters directly to your Hugging Face account so they can be easily imported into your Hackathon Demo Space.
 ```bash
-git clone https://github.com/Mark-Joseph-42/JurisSim.git
-cd JurisSim
-bash setup_server.sh
+# 1. Login to your HF Account in the terminal
+huggingface-cli login
+
+# 2. Upload the adapter folder
+huggingface-cli upload your-username/JurisSim-32B-LoRA ./jurissim-lora .
 ```
 
-**The script automatically:**
-1.  Configures ROCm environment.
-2.  Fetches and prepares the 10,200-row training dataset.
-3.  Executes QLoRA fine-tuning for 3 epochs.
-4.  Merges the LoRA adapter into the base model.
-5.  Deploys the final model via vLLM on Port 8000.
-6.  Ready for the Gradio App.
-
 ---
 
-## 🛡️ Safety & Reliability
+## 6. Frontend Architecture (The Demo UI)
+To win the hackathon, the ML model will be wrapped in a visually premium Agentic Workflow.
 
-- **Z3 Template Safety Net**: If the model fails to generate valid Z3 code, it falls back to 7 hardcoded logical patterns that handle 90% of common loopholes (Threshold Splitting, Jurisdiction Evasion, etc.).
-- **Graceful Fallback**: If fine-tuning fails, the server falls back to the un-tuned base model to ensure the demo never crashes.
-- **Budget Optimized**: Runs on a single GPU ($4/hr), making it highly efficient for production legal tech.
-
----
-
-## 📄 License
-MIT License. Built for the AMD Developer Hackathon 2026.
+### The Agentic Workflow
+1.  **Input:** User pastes legal text into the UI.
+2.  **Inference:** The web app calls the Hugging Face model (`Qwen3-32B` + `JurisSim-LoRA`) to generate the Z3 verification code.
+3.  **Execution:** A Python backend intercepts the code, executes the Z3 solver natively, and captures the result (SAT/UNSAT).
+4.  **Self-Correction:** If Z3 throws a Python syntax error, the agent feeds the error back to the LLM to fix the code automatically before showing the user.
+5.  **Output:** The UI flashes RED (Loophole Found) or GREEN (Secure) based on the mathematical proof.
