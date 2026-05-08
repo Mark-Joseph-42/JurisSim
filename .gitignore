@@ -1,11 +1,6 @@
-__pycache__/
-*.pyc
-.env
-.pytest_cache/
-*.egg-info/
-dist/
-build/
+venv/
 jurissim-lora/
-scratch_speed_test.py
-check_dataset.py
-balance_dataset.py
+*.log
+__pycache__/
+training_metrics.jsonl.prev
+training_log.txt

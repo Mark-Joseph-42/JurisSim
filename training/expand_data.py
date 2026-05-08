@@ -1,63 +1,73 @@
 import json
 import os
+import random
 
 def generate_expanded_data():
     base_data = []
-    # Existing 13 rows would be here or loaded
+    # Seed data from the original 13 rows if they exist
     if os.path.exists("training/dataset.jsonl"):
         with open("training/dataset.jsonl", 'r') as f:
             for line in f:
                 if line.strip():
                     base_data.append(json.loads(line))
     
-    # DPDP Examples
+    # DPDP Substantive Examples
     dpdp_clauses = [
-        "Section 2(i): 'Data Fiduciary' means any person who alone or in conjunction with other persons determines the purpose and means of processing of personal data.",
-        "Section 4: A person may process the personal data of a Data Principal only in accordance with the provisions of this Act and for a lawful purpose for which the Data Principal has given her consent.",
-        "Section 16: The Central Government may, by notification, restrict the transfer of personal data by a Data Fiduciary for processing to such country or territory outside India as may be so notified."
+        {
+            "clause": "Section 2(i): 'Data Fiduciary' means any person who alone or in conjunction with other persons determines the purpose and means of processing of personal data.",
+            "extraction": "- Mandatory Requirement: Data Fiduciary identification based on determination of purpose and means of processing.",
+            "loopholes": "Adversarial Analysis for Definition Gap: An entity might claim to be a 'Data Processor' (not a Fiduciary) by arguing that a parent company or a DAO (Decentralized Autonomous Organization) technically 'determines' the purpose, while the entity merely executes. This evades the primary liabilities and notice requirements of a Fiduciary.",
+            "z3": "from z3 import *\n\nis_fiduciary = Bool('is_fiduciary')\ndetermines_purpose = Bool('determines_purpose')\ndetermines_means = Bool('determines_means')\nentity_is_processor = Bool('entity_is_processor')\n\ns = Solver()\n# Law: determines purpose AND means -> Fiduciary\ns.add(Implies(And(determines_purpose, determines_means), is_fiduciary))\n\n# Adversarial: processor determines means but NOT purpose (claims purpose comes from code/DAO)\ns.add(determines_means == True)\ns.add(determines_purpose == False)\ns.add(is_fiduciary == False)\n\nif s.check() == sat:\n    print('sat')"
+        },
+        {
+            "clause": "Section 4: A person may process the personal data of a Data Principal only in accordance with the provisions of this Act and for a lawful purpose for which the Data Principal has given her consent.",
+            "extraction": "- Mandatory Requirement: Lawful purpose and explicit consent for data processing.",
+            "loopholes": "Adversarial Analysis for Consent Loophole: A service provider could use 'Dark Patterns' to obtain consent through implicit actions, like 'by scrolling you agree' or 'pre-ticked boxes', arguing that the physical act of usage constitutes consent for all lawful purposes under Section 4.",
+            "z3": "from z3 import *\n\nconsent_given = Bool('consent_given')\nuser_scrolled = Bool('user_scrolled')\nexplicit_action = Bool('explicit_action')\n\ns = Solver()\n# Law requires consent\ns.add(consent_given == True)\n# Adversarial claim: scrolling implies consent\ns.add(Implies(user_scrolled, consent_given))\ns.add(user_scrolled == True)\ns.add(explicit_action == False)\n\nif s.check() == sat:\n    print('sat')"
+        }
     ]
-    
-    # Generation patterns
-    # 1. Extraction
-    for clause in dpdp_clauses:
-        base_data.append({
-            "instruction": "Extract testable clauses from this legal text.",
-            "input": clause,
-            "response": f"- Mandatory Requirement: {clause.split(':')[1].strip() if ':' in clause else clause}"
-        })
-        
-    # 2. Loophole Hypothesis (Mirror Proxy)
-    base_data.append({
-        "instruction": "Find adversarial interpretations of this clause.",
-        "input": "Section 16: The Central Government may restrict transfer... to such country as may be so notified.",
-        "response": "Hypothesis 1: Jurisdiction Evasion - A fiduciary could process data in a non-restricted country that then mirrors it to a restricted one.\nHypothesis 2: Definition Gap - The 'transfer' might not be counted if data is merely accessed remotely without physical storage shift."
-    })
-    
-    # 3. Z3 Formalization (Threshold splitting example)
-    base_data.append({
-        "instruction": "Formalize this legal clause and adversarial hypothesis as Z3 code.",
-        "input": "Clause: Companies with turnover > 300cr must appoint a woman director. Hypothesis: Threshold Splitting - Entity splits into two 200cr units.",
-        "response": "from z3 import *\n\ns = Solver()\nt1 = Int('turnover_1')\nt2 = Int('turnover_2')\nlimit = 300\n\n# Collective turnover exceeds limit\ns.add(t1 + t2 > limit)\n# Individual turnovers are below limit\ns.add(t1 < limit, t2 < limit)\n# No director required individually\ns.add(t1 >= 0, t2 >= 0)\n\nif s.check() == sat:\n    print('sat') # Loophole proven"
-    })
 
-    # Add more diverse examples to reach higher count...
-    # For the sake of this execution, I'll generate variations of these patterns.
+    for d in dpdp_clauses:
+        base_data.append({"instruction": "Extract testable clauses from this legal text.", "input": d['clause'], "response": d['extraction']})
+        base_data.append({"instruction": "Find adversarial interpretations of this clause.", "input": d['clause'], "response": d['loopholes']})
+        base_data.append({"instruction": "Formalize this legal clause and adversarial hypothesis as Z3 code.", "input": f"Clause: {d['clause']}\nHypothesis: {d['loopholes'].split(':')[0]}", "response": d['z3']})
+
+    # Pattern Generation for diverse Acts
+    acts = {
+        "IT Act 2000": "Section 43A regarding compensation for failure to protect sensitive personal data.",
+        "BNS 2023": "Provisions regarding criminal breach of trust and misappropriation of property.",
+        "Companies Act 2013": "Section 135 mandates CSR spending (2% of net profit) for companies above thresholds.",
+        "Income Tax Act 1961": "Section 115JB regarding Minimum Alternate Tax (MAT) on book profits.",
+        "FDI Policy": "Restrictions on multi-brand retail and inventory-based e-commerce models."
+    }
     
-    acts = ["IT Act 2000", "BNS 2023", "Companies Act 2013", "Income Tax Act 1961", "FDI Policy"]
-    patterns = ["Threshold Splitting", "Definition Gap", "Jurisdiction Evasion", "Temporal Gap", "Scope Limitation"]
-    
-    for act in acts:
-        for pattern in patterns:
+    patterns = {
+        "Threshold Splitting": {
+            "analysis": "Adversarial Analysis for Threshold Splitting: A corporation can split into multiple subsidiaries, each staying just below the numeric threshold (e.g., turnover or profit) to avoid mandatory obligations like CSR spending or audit requirements.",
+            "amendment": "Amended Text: 'For the purpose of calculating thresholds, the aggregate turnover/profit of all related parties, subsidiaries, and group entities as defined under Section 2(76) shall be considered as a single unit.'"
+        },
+        "Definition Gap": {
+            "analysis": "Adversarial Analysis for Definition Gap: Exploiting the lack of specific mention of 'Virtual Digital Assets' or 'Stablecoins' in older definitions of 'recognized currency' or 'securities' to avoid taxation or regulatory oversight.",
+            "amendment": "Amended Text: 'The definition of \"currency\" and \"securities\" shall include all digital assets, tokens, and cryptographic representations of value, regardless of the underlying technology or platform.'"
+        },
+        "Jurisdiction Evasion": {
+            "analysis": "Adversarial Analysis for Jurisdiction Evasion: Routing transactions or data processing through a 'Mirror Proxy' in a tax haven or a country with lax privacy laws, arguing that the primary 'nexus' of the operation is outside the local jurisdiction.",
+            "amendment": "Amended Text: 'The provisions of this Act apply to any entity that provides services to residents within the territory, regardless of the physical location of the server or the registration of the entity.'"
+        }
+    }
+
+    # Generate substantive variations
+    for act_name, act_text in acts.items():
+        for pat_name, pat_content in patterns.items():
             base_data.append({
-                "instruction": f"Analyze this clause from {act} for a {pattern} loophole.",
-                "input": f"Relevant provision regarding operational limits in {act}.",
-                "response": f"Adversarial Analysis for {pattern}: ... [Detailed reasoning for {act}]"
+                "instruction": f"Analyze this clause from {act_name} for a {pat_name} loophole.",
+                "input": act_text,
+                "response": pat_content["analysis"]
             })
-            
             base_data.append({
                 "instruction": "Suggest an amendment to close this loophole.",
-                "input": f"Loophole in {act} involving {pattern}.",
-                "response": f"Amended Text: 'Regardless of {pattern.lower()}, the following obligations apply...'"
+                "input": f"Loophole in {act_name} involving {pat_name}.",
+                "response": pat_content["amendment"]
             })
 
     # Save expanded data

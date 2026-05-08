@@ -6,6 +6,7 @@ from datasets import load_dataset
 def prepare_legalbrain():
     print("Processing LegalBrain Indic Dataset...")
     try:
+        # Using a subset for faster processing in hackathon context, but targetting 5000
         dataset = load_dataset("Prarabdha/indian-legal-supervised-fine-tuning-data", split="train", streaming=True)
         data = []
         count = 0
@@ -14,8 +15,8 @@ def prepare_legalbrain():
             response = item.get('response', '') or ''
             question = item.get('question', '') or ''
             
-            # Skip empty entries
-            if not context or not response or len(response) < 20:
+            # Skip empty entries or too short responses
+            if not response or len(response) < 30:
                 continue
             
             # Filter for English and legal relevance
@@ -53,10 +54,13 @@ def prepare_legalbench():
         try:
             dataset = load_dataset("nguha/legalbench", task, split="train")
             for item in dataset:
+                output = item.get('answer', '')
+                if not output or len(str(output)) == 0:
+                    continue
                 all_data.append({
                     "instruction": f"Legal Reasoning Task ({task}): {item.get('question', 'Analyze the text.')}",
                     "input": item.get('text', ''),
-                    "output": item.get('answer', '')
+                    "output": str(output)
                 })
         except Exception as e:
             print(f"Error loading LegalBench task {task}: {e}")
@@ -65,24 +69,11 @@ def prepare_legalbench():
     random.shuffle(all_data)
     return all_data[:3000]
 
-def prepare_kaggle_mock():
-    # Since I cannot download from Kaggle directly without credentials in this script, 
-    # I will provide a structure for it. On the server, the user would provide the file.
-    # For now, I'll return empty list as a placeholder if file doesn't exist.
-    print("Checking for Kaggle Indian Legal Dataset...")
-    path = "training/kaggle_indian_legal.json"
-    if os.path.exists(path):
-        with open(path, 'r') as f:
-            data = json.load(f)
-            return [{"instruction": d['question'], "input": "", "output": d['answer']} for d in data[:2000]]
-    return []
-
 def merge_and_save():
     legalbrain = prepare_legalbrain()
     legalbench = prepare_legalbench()
-    kaggle = prepare_kaggle_mock()
     
-    # Load our existing custom data (has 'response' key, not 'output')
+    # Load our existing custom data (normalize 'response' to 'output')
     custom_data = []
     if os.path.exists("training/dataset.jsonl"):
         with open("training/dataset.jsonl", 'r') as f:
@@ -90,22 +81,41 @@ def merge_and_save():
                 if not line.strip():
                     continue
                 d = json.loads(line)
-                custom_data.append({
-                    "instruction": d.get('instruction', ''),
-                    "input": d.get('input', ''),
-                    "output": d.get('response', d.get('output', ''))
-                })
+                # Key normalization
+                output = d.get('output', d.get('response', ''))
+                if output and len(output) >= 20:
+                    custom_data.append({
+                        "instruction": d.get('instruction', ''),
+                        "input": d.get('input', ''),
+                        "output": output
+                    })
 
-    final_dataset = legalbrain + legalbench + kaggle + custom_data
+    final_dataset = legalbrain + legalbench + custom_data
     random.shuffle(final_dataset)
     
     print(f"Total merged dataset size: {len(final_dataset)}")
     
-    with open("training/sft_dataset.jsonl", 'w') as f:
-        for item in final_dataset:
+    # Train/Val Split (90/10)
+    split_idx = int(len(final_dataset) * 0.9)
+    train_data = final_dataset[:split_idx]
+    val_data = final_dataset[split_idx:]
+    
+    print(f"Saving {len(train_data)} train samples and {len(val_data)} val samples.")
+    
+    with open("training/sft_dataset_train.jsonl", 'w') as f:
+        for item in train_data:
+            f.write(json.dumps(item) + "\n")
+            
+    with open("training/sft_dataset_val.jsonl", 'w') as f:
+        for item in val_data:
             f.write(json.dumps(item) + "\n")
     
-    print("Saved to training/sft_dataset.jsonl")
+    # Also save a unified one for backward compatibility if needed
+    with open("training/sft_dataset.jsonl", 'w') as f:
+        for item in train_data:
+            f.write(json.dumps(item) + "\n")
+    
+    print("Done. Datasets saved to training/sft_dataset_train.jsonl and sft_dataset_val.jsonl")
 
 if __name__ == "__main__":
     merge_and_save()

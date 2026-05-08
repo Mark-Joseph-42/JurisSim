@@ -1,17 +1,23 @@
+import os
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
-import os
 
-def merge_lora():
+def merge():
     base_model_id = os.environ.get("MODEL_ID", "Qwen/Qwen3-32B")
-    adapter_dir = "./jurissim-lora"
-    output_dir = "./jurissim-merged"
+    adapter_path = "./jurissim-lora"
+    merged_path = "./jurissim-merged"
 
-    print(f"--- Merging LoRA Adapter from {adapter_dir} into {base_model_id} ---")
+    print(f"--- Merging LoRA Adapter ---")
+    print(f"Base Model: {base_model_id}")
+    print(f"Adapter: {adapter_path}")
 
-    # Load base model in bfloat16
-    tokenizer = AutoTokenizer.from_pretrained(base_model_id, trust_remote_code=True)
+    if not os.path.exists(adapter_path):
+        print(f"Error: Adapter path {adapter_path} not found.")
+        return
+
+    # 1. Load base model (in bf16)
+    print("Loading base model...")
     base_model = AutoModelForCausalLM.from_pretrained(
         base_model_id,
         torch_dtype=torch.bfloat16,
@@ -19,19 +25,20 @@ def merge_lora():
         trust_remote_code=True
     )
 
-    # Load adapter
-    model = PeftModel.from_pretrained(base_model, adapter_dir)
+    # 2. Load tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(base_model_id, trust_remote_code=True)
 
-    # Merge and unload
-    print("Merging weights...")
-    merged_model = model.merge_and_unload()
+    # 3. Load adapter and merge
+    print("Loading adapter and merging...")
+    model = PeftModel.from_pretrained(base_model, adapter_path)
+    model = model.merge_and_unload()
 
-    # Save merged model and tokenizer
-    print(f"Saving merged model to {output_dir}...")
-    merged_model.save_pretrained(output_dir)
-    tokenizer.save_pretrained(output_dir)
-
-    print("--- Merge Complete ---")
+    # 4. Save merged model
+    print(f"Saving merged model to {merged_path}...")
+    model.save_pretrained(merged_path, safe_serialization=True)
+    tokenizer.save_pretrained(merged_path)
+    
+    print(f"--- Merge Complete. Merged model saved to {merged_path} ---")
 
 if __name__ == "__main__":
-    merge_lora()
+    merge()
